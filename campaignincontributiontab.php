@@ -2,35 +2,70 @@
 
 require_once 'campaignincontributiontab.civix.php';
 
+/**
+ * Add a whole mess of extra fields to the contribution tab.
+ */
 function campaignincontributiontab_civicrm_searchColumns($objectName, &$headers, &$values, &$selector) {
-  if ($objectName == 'contribution') {
-    foreach ($headers as $k => $header) {
-      if (isset($header['name']) && $header['name'] == 'Premium') {
-        $headers[$k]['name'] = 'Campaign';
-        unset($headers[$k]['sort']);
+  if ($objectName == 'contribution' && !empty($values)) {
+    // Remove the action links, we'll re-add them later.
+    unset($headers[6]);
+    $fieldArray = [
+      [
+        'name' => 'campaign_id',
+        'label' => ts('Campaign'),
+        'callback' => 'getCampaignName',
+      ],
+    ];
+    $contributionIds = CRM_Utils_Array::collect('contribution_id', $values);
+    // Add the additional contribution fields to the values array.
+    $contributionFields = civicrm_api3('Contribution', 'get', [
+      'id' => ['IN' => $contributionIds],
+      'options' => ['limit' => 0],
+    ])['values'];
+    foreach ($values as $k => $value) {
+      if (isset($contributionFields[$value['contribution_id']])) {
+        $values[$k] = array_merge($contributionFields[$value['contribution_id']], $value);
       }
     }
-    // Get the contact id of the contact we're viewing.
-    $contact_id = $values[0]['contact_id'];
-    // Select a list of contributions that have soft credits from this contact,
-    // plus the name of the creditees.  This is better than doing a separate SQL
-    // query for each contribution.
-    if ($contact_id) {
-      $sql = "SELECT cc.id, camp.title FROM civicrm_contribution cc JOIN civicrm_campaign camp ON cc.campaign_id = camp.id WHERE cc.contact_id = %1";
-      $dao = CRM_Core_DAO::executeQuery($sql, array(1 => array($contact_id, 'Integer')));
-      while ($dao->fetch()) {
-        $campaignName[$dao->id] = $dao->title;
-      }
 
-      // Insert the soft creditee name as "product_name" so we don't have to
-      // change the templates.
+    formatValues($values, $fieldArray);
+
+    // Add the data.
+    $headerId = 6;
+    foreach ($fieldArray as $field) {
+      $headers[$headerId]['field_name'] = $field['name'];
+      $headers[$headerId]['name'] = $field['label'];
+      $headers[$headerId]['weight'] = $headerId * 10;
+      $headerId++;
+    }
+
+    // Re-add the action links.
+    $headers[] = ['desc' => 'Actions', 'type' => 'actions', 'weight' => 99999];
+  }
+}
+
+/**
+ * We format the values - pseudoconstants are resolved, money fields are formatted as money, etc.
+ * @param type $values
+ * @param type $fieldArray
+ */
+function formatValues(&$values, $fieldArray) {
+  foreach ($fieldArray as $field) {
+    if (isset($field['callback'])) {
       foreach ($values as $k => $value) {
-        if (array_key_exists($value['contribution_id'], $campaignName)) {
-          $values[$k]['product_name'] = $campaignName[$value['contribution_id']];
+        if (isset($value[$field['name']])) {
+          $values[$k][$field['name']] = call_user_func($field['callback'], $value[$field['name']], $field['name']);
         }
       }
     }
   }
+}
+
+function getCampaignName($data, $field) {
+  if ($data) {
+    return CRM_Contribute_BAO_Contribution::buildOptions('campaign_id')[$data];
+  }
+  return NULL;
 }
 
 /**
